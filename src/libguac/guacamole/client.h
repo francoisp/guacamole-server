@@ -45,6 +45,7 @@
 #include <stdarg.h>
 #include <time.h>
 
+struct guac_recording; /* forward decl */
 struct guac_client {
 
     /**
@@ -310,6 +311,12 @@ struct guac_client {
      * is used.
      */
     void* __plugin_handle;
+
+        /**
+         * The in-progress session recording, if any. This is set by the
+         * protocol implementations when they call guac_recording_create().
+         */
+        struct guac_recording* __recording;
 
 };
 

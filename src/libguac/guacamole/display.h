@@ -315,6 +315,22 @@ void guac_display_notify_user_left(guac_display* display, guac_user* user);
 void guac_display_notify_user_moved_mouse(guac_display* display, guac_user* user, int x, int y, int mask);
 
 /**
+ * Writes a PNG snapshot of the current last_frame of the display to the
+ * provided filesystem path. The cursor image, if any, is drawn over the base
+ * layer in the appropriate position.
+ *
+ * @param display
+ *     The display to snapshot.
+ *
+ * @param path
+ *     The destination file path for the PNG image.
+ *
+ * @return
+ *     Zero on success, non-zero on failure.
+ */
+int guac_display_write_png(guac_display* display, const char* path);
+
+/**
  * Ends the current frame, where the number of input frames that were
  * considered in creating this frame is either unknown or inapplicable,
  * allowing the guac_display to complete sending the frame to connected

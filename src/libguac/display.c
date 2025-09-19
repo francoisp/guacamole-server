@@ -128,6 +128,9 @@ guac_display* guac_display_alloc(guac_client* client) {
     display->default_layer = guac_display_add_layer(display, (guac_layer*) GUAC_DEFAULT_LAYER, 1);
     display->cursor_buffer = guac_display_alloc_buffer(display, 0);
 
+    /* Screenshot rate limit: allow immediate first shot */
+    display->last_screenshot_timestamp = 0;
+
     /* Init operation FIFO used by worker threads */
     guac_fifo_init(&display->ops, display->ops_items,
             GUAC_DISPLAY_WORKER_FIFO_SIZE, sizeof(guac_display_plan_operation));
@@ -341,6 +344,88 @@ void guac_display_notify_user_left(guac_display* display, guac_user* user) {
         display->pending_frame.cursor_user = NULL;
 
     guac_rwlock_release_lock(&display->pending_frame.lock);
+}
+
+/**
+ * Writes a PNG snapshot of the current last_frame of the display. The default
+ * layer is used as the base image. If a cursor buffer exists, it is drawn
+ * over the base at the last known cursor position using the configured
+ * hotspot, so the resulting PNG closely matches what users see.
+ *
+ * The image is written to the given filesystem path.
+ *
+ * NOTE: This performs a read lock on last_frame to ensure consistency.
+ */
+int guac_display_write_png(guac_display* display, const char* path) {
+
+    if (!display || !path)
+        return 1;
+
+    int result = 1; /* non-zero on failure by default */
+
+    /* Enforce simple rate limit: at most one PNG per second */
+    guac_timestamp now = guac_timestamp_current();
+    if (display->last_screenshot_timestamp != 0
+            && now - display->last_screenshot_timestamp < 1000)
+        return 0; /* skip silently */
+
+    /* We'll proceed; snapshot last_frame under read lock */
+    guac_rwlock_acquire_read_lock(&display->last_frame.lock);
+
+    guac_display_layer* base = display->default_layer;
+    if (!base || base->last_frame.width <= 0 || base->last_frame.height <= 0)
+        goto done;
+
+    const int width = base->last_frame.width;
+    const int height = base->last_frame.height;
+    const int stride = base->last_frame.buffer_stride;
+
+    guac_rect full = { .left = 0, .top = 0, .right = width, .bottom = height };
+    unsigned char* base_buf = GUAC_DISPLAY_LAYER_STATE_MUTABLE_BUFFER(base->last_frame, full);
+
+    cairo_format_t fmt = base->opaque ? CAIRO_FORMAT_RGB24 : CAIRO_FORMAT_ARGB32;
+    cairo_surface_t* surface = cairo_image_surface_create_for_data(
+            base_buf, fmt, width, height, stride);
+
+    if (cairo_surface_status(surface) != CAIRO_STATUS_SUCCESS)
+        goto destroy_surface;
+
+    /* Overlay cursor, if present */
+    if (display->cursor_buffer &&
+            display->cursor_buffer->last_frame.width > 0 &&
+            display->cursor_buffer->last_frame.height > 0) {
+
+        guac_display_layer* cur = display->cursor_buffer;
+        const int cw = cur->last_frame.width;
+        const int ch = cur->last_frame.height;
+        const int cstride = cur->last_frame.buffer_stride;
+        guac_rect crec = (guac_rect){ .left = 0, .top = 0, .right = cw, .bottom = ch };
+        unsigned char* cur_buf = GUAC_DISPLAY_LAYER_STATE_MUTABLE_BUFFER(cur->last_frame, crec);
+
+        cairo_surface_t* cursor = cairo_image_surface_create_for_data(
+                cur_buf, CAIRO_FORMAT_ARGB32, cw, ch, cstride);
+        if (cairo_surface_status(cursor) == CAIRO_STATUS_SUCCESS) {
+            cairo_t* cr = cairo_create(surface);
+            double x = display->last_frame.cursor_x - display->last_frame.cursor_hotspot_x;
+            double y = display->last_frame.cursor_y - display->last_frame.cursor_hotspot_y;
+            cairo_set_source_surface(cr, cursor, x, y);
+            cairo_paint(cr);
+            cairo_destroy(cr);
+        }
+        cairo_surface_destroy(cursor);
+    }
+
+    if (cairo_surface_write_to_png(surface, path) == CAIRO_STATUS_SUCCESS) {
+        result = 0;
+        display->last_screenshot_timestamp = now;
+    }
+
+destroy_surface:
+    cairo_surface_destroy(surface);
+
+done:
+    guac_rwlock_release_lock(&display->last_frame.lock);
+    return result;
 }
 
 void guac_display_notify_user_moved_mouse(guac_display* display, guac_user* user, int x, int y, int mask) {

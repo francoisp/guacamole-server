@@ -76,11 +76,20 @@ guac_recording* guac_recording_create(guac_client* client,
     recording->include_mouse = include_mouse;
     recording->include_touch = include_touch;
     recording->include_keys = include_keys;
+    /* Store resolved path and filename for reuse */
+    strncpy(recording->path, path ? path : "", sizeof(recording->path) - 1);
+    recording->path[sizeof(recording->path) - 1] = '\0';
+    strncpy(recording->filename, filename, sizeof(recording->filename) - 1);
+    recording->filename[sizeof(recording->filename) - 1] = '\0';
 
     /* Replace client socket with wrapped recording socket only if including
      * output within the recording */
     if (include_output)
         client->socket = guac_socket_tee(client->socket, recording->socket);
+
+    /* Associate with client for downstream reuse (e.g., snapshots) */
+    client->__recording = recording;
+    recording->client = client;
 
     /* Recording creation succeeded */
     guac_client_log(client, GUAC_LOG_INFO, "Recording of session will be "
@@ -98,6 +107,9 @@ void guac_recording_free(guac_recording* recording) {
         guac_socket_free(recording->socket);
 
     /* Free recording itself */
+    if (recording && recording->client && recording->client->__recording == recording)
+        recording->client->__recording = NULL;
+    /* Note: client reference is not stored here; caller should clear */
     guac_mem_free(recording);
 
 }

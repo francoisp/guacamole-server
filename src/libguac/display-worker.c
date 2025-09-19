@@ -29,11 +29,14 @@
 #include "guacamole/rwlock.h"
 #include "guacamole/socket.h"
 #include "guacamole/timestamp.h"
+#include "guacamole/recording.h"
 
 #include <inttypes.h>
 #include <limits.h>
 #include <cairo/cairo.h>
 #include <pthread.h>
+#include <stdlib.h> /* getenv */
+#include <stdio.h>  /* snprintf */
 
 /**
  * Returns a new Cairo surface representing the contents of the given dirty
@@ -440,6 +443,18 @@ void* guac_display_worker_thread(void* data) {
             /* This is now absolutely everything for the current frame,
              * and it's safe to flush any outstanding data */
             guac_socket_flush(client->socket);
+
+            /* If a recording is active, write a PNG snapshot into the
+             * same directory as the recording. */
+            if (client->__recording && client->__recording->path[0] != '\0') {
+                char filename[4096];
+                int n = snprintf(filename, sizeof(filename), "%s/frame-%" PRIu64 "-%u.png",
+                        client->__recording->path,
+                        (uint64_t) display->last_frame.timestamp,
+                        display->last_frame.frames);
+                if (n > 0 && (size_t)n < sizeof(filename))
+                    guac_display_write_png(display, filename);
+            }
 
             /* Notify any watchers of render_state that a frame is no longer in progress */
             guac_flag_set_and_lock(&display->render_state, GUAC_DISPLAY_RENDER_STATE_FRAME_NOT_IN_PROGRESS);

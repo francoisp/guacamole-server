@@ -799,6 +799,12 @@ struct guac_display {
      */
     guac_flag render_state;
 
+    /**
+     * Timestamp of the last PNG screenshot written via
+     * guac_display_write_png(). Used to rate-limit screenshots.
+     */
+    guac_timestamp last_screenshot_timestamp;
+
 };
 
 /**
