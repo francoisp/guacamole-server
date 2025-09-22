@@ -445,10 +445,11 @@ void* guac_display_worker_thread(void* data) {
             guac_socket_flush(client->socket);
 
             /* If a recording is active, write a PNG snapshot into the
-             * same directory as the recording. */
+             * a screenshots subdirectory directory of where the recording.
+             * we should prolly have a limit to the number of screenshots to keep... */
             if (client->__recording && client->__recording->path[0] != '\0') {
                 char filename[4096];
-                int n = snprintf(filename, sizeof(filename), "%s/frame-%" PRIu64 "-%u.png",
+                int n = snprintf(filename, sizeof(filename), "%s/screenshots/frame-%" PRIu64 "-%u.png",
                         client->__recording->path,
                         (uint64_t) display->last_frame.timestamp,
                         display->last_frame.frames);
