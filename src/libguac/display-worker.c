@@ -37,6 +37,178 @@
 #include <pthread.h>
 #include <stdlib.h> /* getenv */
 #include <stdio.h>  /* snprintf */
+#include <dirent.h>
+#include <errno.h>
+#include <string.h>
+#include <sys/stat.h>
+#include <unistd.h>
+
+/**
+ * Represents a discovered screenshot file with parsed timestamp.
+ */
+typedef struct guac_screenshot_file {
+    char path[4096];
+    uint64_t ts_ms;
+    unsigned frame_seq;
+} guac_screenshot_file;
+
+/**
+ * Basic dynamic array for 64-bit bucket keys with associated counts.
+ */
+typedef struct bucket_count_entry {
+    uint64_t key;
+    int count;
+} bucket_count_entry;
+
+static int bucket_count_get_index(bucket_count_entry* entries, int used, uint64_t key) {
+    for (int i = 0; i < used; i++) {
+        if (entries[i].key == key) return i;
+    }
+    return -1;
+}
+
+/**
+ * Compares two screenshot files by timestamp descending, then frame_seq descending.
+ */
+static int compare_sshot_desc(const void* a, const void* b) {
+    const guac_screenshot_file* fa = (const guac_screenshot_file*) a;
+    const guac_screenshot_file* fb = (const guac_screenshot_file*) b;
+    if (fa->ts_ms < fb->ts_ms) return 1;
+    if (fa->ts_ms > fb->ts_ms) return -1;
+    if (fa->frame_seq < fb->frame_seq) return 1;
+    if (fa->frame_seq > fb->frame_seq) return -1;
+    return 0;
+}
+
+/**
+ * Prunes screenshots in the given directory based on the following policy:
+ * - For age <= 60s: keep up to 20 per second (newest 20 per-second bucket)
+ * - For 60s < age <= 1h: keep at most 1 per minute (newest per-minute bucket)
+ * - For 1h < age <= 24h: keep at most 1 per 5 minutes (newest per 5-minute bucket)
+ * - For 24h < age <= 30d: keep at most 1 per hour (newest per-hour bucket)
+ * - For age > 30d: delete
+ */
+static bucket_count_entry* upsert_bucket(bucket_count_entry** arr, int* used, int* cap, uint64_t key) {
+    int idx = bucket_count_get_index(*arr, *used, key);
+    if (idx >= 0) return &((*arr)[idx]);
+    if (*used == *cap) {
+        int new_cap = (*cap == 0) ? 64 : (*cap * 2);
+        bucket_count_entry* na = (bucket_count_entry*) realloc(*arr, new_cap * sizeof(**arr));
+        if (!na) return NULL;
+        *arr = na; *cap = new_cap;
+    }
+    bucket_count_entry* e = &((*arr)[(*used)++]);
+    e->key = key; e->count = 0;
+    return e;
+}
+
+static void guac_prune_screenshots(const char* dir, guac_timestamp now_ms) {
+
+    if (!dir || !*dir) return;
+
+    DIR* d = opendir(dir);
+    if (!d) return;
+
+    guac_screenshot_file* files = NULL;
+    size_t files_cap = 0, files_len = 0;
+
+    struct dirent* ent;
+    while ((ent = readdir(d)) != NULL) {
+        const char* name = ent->d_name;
+        if (!name) continue;
+        if (strncmp(name, "frame-", 6) != 0) continue;
+        size_t len = strlen(name);
+        if (len < 10 || strcmp(name + len - 4, ".png") != 0) continue;
+
+        // Parse pattern: frame-<ts>-<frame>.png
+        unsigned long long ts_val = 0ULL;
+        unsigned frame_seq = 0U;
+        if (sscanf(name, "frame-%llu-%u.png", &ts_val, &frame_seq) != 2)
+            continue;
+
+        // Append to list
+        if (files_len == files_cap) {
+            size_t new_cap = files_cap ? files_cap * 2 : 128;
+            guac_screenshot_file* new_arr = (guac_screenshot_file*) realloc(files, new_cap * sizeof(*files));
+            if (!new_arr) break;
+            files = new_arr;
+            files_cap = new_cap;
+        }
+        guac_screenshot_file* f = &files[files_len++];
+        int n = snprintf(f->path, sizeof(f->path), "%s/%s", dir, name);
+        if (n <= 0 || (size_t)n >= sizeof(f->path)) { files_len--; continue; }
+        f->ts_ms = (uint64_t) ts_val;
+        f->frame_seq = frame_seq;
+    }
+    closedir(d);
+
+    if (!files || files_len == 0) { free(files); return; }
+
+    qsort(files, files_len, sizeof(*files), compare_sshot_desc);
+
+    // Bucket maps for tiers
+    bucket_count_entry* sec_buckets = NULL; int sec_used = 0, sec_cap = 0; // up to 20 per second
+    bucket_count_entry* min_buckets = NULL; int min_used = 0, min_cap = 0; // 1 per minute
+    bucket_count_entry* min5_buckets = NULL; int min5_used = 0, min5_cap = 0; // 1 per 5 minutes
+    bucket_count_entry* hour_buckets = NULL; int hour_used = 0, hour_cap = 0; // 1 per hour
+
+    const uint64_t MS_1S = 1000ULL;
+    const uint64_t MS_1M = 60ULL * MS_1S;
+    const uint64_t MS_1H = 60ULL * MS_1M;
+    const uint64_t MS_24H = 24ULL * MS_1H;
+    const uint64_t MS_30D = 30ULL * 24ULL * MS_1H;
+
+    // Track deletions lazily
+    for (size_t i = 0; i < files_len; i++) {
+        guac_screenshot_file* f = &files[i];
+        uint64_t age = (now_ms > f->ts_ms) ? (now_ms - f->ts_ms) : 0ULL;
+
+        if (age > MS_30D) {
+            unlink(f->path);
+            continue;
+        }
+
+        if (age > MS_24H) {
+            uint64_t key = f->ts_ms / MS_1H; // hourly
+            bucket_count_entry* e = upsert_bucket(&hour_buckets, &hour_used, &hour_cap, key);
+            if (!e) continue; // out of mem: abort pruning softly
+            if (e->count >= 1) { unlink(f->path); }
+            else { e->count++; }
+            continue;
+        }
+
+        if (age > MS_1H) {
+            uint64_t key = f->ts_ms / (5ULL * MS_1M); // 5-min buckets
+            bucket_count_entry* e = upsert_bucket(&min5_buckets, &min5_used, &min5_cap, key);
+            if (!e) continue;
+            if (e->count >= 1) { unlink(f->path); }
+            else { e->count++; }
+            continue;
+        }
+
+        if (age > MS_1M) {
+            uint64_t key = f->ts_ms / MS_1M; // per-minute
+            bucket_count_entry* e = upsert_bucket(&min_buckets, &min_used, &min_cap, key);
+            if (!e) continue;
+            if (e->count >= 1) { unlink(f->path); }
+            else { e->count++; }
+            continue;
+        }
+
+        // <= 60s: keep up to 20 per second
+        uint64_t key = f->ts_ms / MS_1S; // per-second
+        bucket_count_entry* e = upsert_bucket(&sec_buckets, &sec_used, &sec_cap, key);
+        if (!e) continue;
+        if (e->count >= 20) { unlink(f->path); }
+        else { e->count++; }
+    }
+
+    free(files);
+    free(sec_buckets);
+    free(min_buckets);
+    free(min5_buckets);
+    free(hour_buckets);
+}
 
 /**
  * Returns a new Cairo surface representing the contents of the given dirty
@@ -453,8 +625,13 @@ void* guac_display_worker_thread(void* data) {
                         client->__recording->screenshot_path,
                         (uint64_t) display->last_frame.timestamp,
                         display->last_frame.frames);
-                if (n > 0 && (size_t)n < sizeof(filename))
-                    guac_display_write_png(display, filename);
+                if (n > 0 && (size_t)n < sizeof(filename)) {
+                    if (guac_display_write_png(display, filename) == 0) {
+                        // After successful write, enforce retention policy
+                        guac_prune_screenshots(client->__recording->screenshot_path,
+                                               guac_timestamp_current());
+                    }
+                }
             }
 
             /* Notify any watchers of render_state that a frame is no longer in progress */

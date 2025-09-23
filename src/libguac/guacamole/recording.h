@@ -93,12 +93,12 @@ typedef struct guac_recording {
      * caution. Key events can easily contain sensitive information, such as
      * passwords, credit card numbers, etc.
      */
-    int include_keys;
+        int include_keys;
 
-/**
- * The directory path where the recording file resides.
- */
-char screenshot_path[GUAC_COMMON_RECORDING_MAX_NAME_LENGTH];
+        /**
+         * The directory path where the recording file resides.
+         */
+        char path[GUAC_COMMON_RECORDING_MAX_NAME_LENGTH];
 
         /**
          * The final filename used for the recording file (without path), which
@@ -106,10 +106,17 @@ char screenshot_path[GUAC_COMMON_RECORDING_MAX_NAME_LENGTH];
          */
         char filename[GUAC_COMMON_RECORDING_MAX_NAME_LENGTH];
 
-                /**
-                 * The client this recording is associated with (for cleanup hooks).
-                 */
-                guac_client* client;
+        /**
+         * The directory path where screenshots related to this recording
+         * should be written. This is typically a subdirectory derived from
+         * the final recording filename within the recording path.
+         */
+        char screenshot_path[GUAC_COMMON_RECORDING_MAX_NAME_LENGTH];
+
+        /**
+         * The client this recording is associated with (for cleanup hooks).
+         */
+        guac_client* client;
 
 } guac_recording;
 
