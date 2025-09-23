@@ -69,6 +69,17 @@ guac_recording* guac_recording_create(guac_client* client,
         return NULL;
     }
 
+    char screenshot_path[GUAC_COMMON_RECORDING_MAX_NAME_LENGTH];
+    snprintf(screenshot_path, sizeof(screenshot_path), "%s/screenshots", path);
+    /* Attempt to open a screenshot file */
+    fd = guac_openat(screenshot_path, name, &how);
+    if (fd == -1) {
+        guac_client_log(client, GUAC_LOG_ERROR, "Creation of recording "
+                "failed: %s: %s", guac_error_message,
+                guac_status_string(guac_error));
+        return NULL;
+    }
+
     /* Create recording structure with reference to underlying socket */
     guac_recording* recording = guac_mem_alloc(sizeof(guac_recording));
     recording->socket = guac_socket_open(fd);
@@ -77,8 +88,8 @@ guac_recording* guac_recording_create(guac_client* client,
     recording->include_touch = include_touch;
     recording->include_keys = include_keys;
     /* Store resolved path and filename for reuse */
-    strncpy(recording->path, path ? path : "", sizeof(recording->path) - 1);
-    recording->path[sizeof(recording->path) - 1] = '\0';
+    strncpy(recording->screenshot_path, screenshot_path, sizeof(recording->screenshot_path) - 1);
+    recording->screenshot_path[sizeof(recording->screenshot_path) - 1] = '\0';
     strncpy(recording->filename, filename, sizeof(recording->filename) - 1);
     recording->filename[sizeof(recording->filename) - 1] = '\0';
 

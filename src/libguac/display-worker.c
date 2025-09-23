@@ -447,10 +447,10 @@ void* guac_display_worker_thread(void* data) {
             /* If a recording is active, write a PNG snapshot into the
              * a screenshots subdirectory directory of where the recording.
              * we should prolly have a limit to the number of screenshots to keep... */
-            if (client->__recording && client->__recording->path[0] != '\0') {
+            if (client->__recording && client->__recording->screenshot_path[0] != '\0') {
                 char filename[4096];
-                int n = snprintf(filename, sizeof(filename), "%s/screenshots/frame-%" PRIu64 "-%u.png",
-                        client->__recording->path,
+                int n = snprintf(filename, sizeof(filename), "%s/frame-%" PRIu64 "-%u.png",
+                        client->__recording->screenshot_path,
                         (uint64_t) display->last_frame.timestamp,
                         display->last_frame.frames);
                 if (n > 0 && (size_t)n < sizeof(filename))

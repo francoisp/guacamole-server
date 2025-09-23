@@ -95,10 +95,10 @@ typedef struct guac_recording {
      */
     int include_keys;
 
-        /**
-         * The directory path where the recording file resides.
-         */
-        char path[GUAC_COMMON_RECORDING_MAX_NAME_LENGTH];
+/**
+ * The directory path where the recording file resides.
+ */
+char screenshot_path[GUAC_COMMON_RECORDING_MAX_NAME_LENGTH];
 
         /**
          * The final filename used for the recording file (without path), which
